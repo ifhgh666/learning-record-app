@@ -1,0 +1,35 @@
+{
+  "name": "learning-record",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "私有学习记录本 —— 本机运行，笔记 + 每日推荐 + 壁纸 + AI 对话",
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"node --watch server/index.mjs\" \"vite --config web/vite.config.mjs\"",
+    "build": "vite build --config web/vite.config.mjs",
+    "start": "node scripts/start.mjs",
+    "server": "node server/index.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test:storage": "node scripts/test-storage.mjs",
+    "test:git": "node scripts/test-git-commit.mjs",
+    "test:wallpaper": "node scripts/test-wallpaper.mjs",
+    "test:ai": "node scripts/test-ai.mjs",
+    "verify:real": "node scripts/verify-real.mjs",
+    "prewarm": "node scripts/prewarm.mjs",
+    "shot": "node scripts/shot.mjs",
+    "check": "node scripts/test-storage.mjs && node scripts/test-git-commit.mjs && node scripts/test-wallpaper.mjs && node scripts/test-ai.mjs && node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.4",
+    "@milkdown/crepe": "^7.15.5",
+    "@milkdown/kit": "^7.15.5",
+    "gray-matter": "^4.0.3",
+    "hono": "^4.11.5",
+    "vue": "^3.5.22"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.7"
+  }
+}

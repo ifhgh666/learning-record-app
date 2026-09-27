@@ -1,0 +1,25 @@
+# 统一行尾为 LF。
+#
+# 为什么需要：Windows 上 git 默认 core.autocrlf=true，会在检出时把 LF 转成 CRLF、
+# 提交时再转回来。而服务端写文件用的是 LF，于是每次运行测试/写笔记后，
+# git 都会报 "LF will be replaced by CRLF" 并重新检查这些文件，
+# 让 `git status` 出现"已修改但内容相同"的假象（实测困扰过）。
+# 明确指定 eol=lf 后行为就固定了。
+* text=auto eol=lf
+
+# ⚠ 例外：.cmd/.bat 必须是 CRLF。
+# cmd.exe 用 LF 行尾解析批处理会语句错乱，报 `'tlocal' is not recognized`
+# 这类莫名其妙的错（实测踩过）。如果这里也统一成 LF，重新克隆仓库后
+# 双击启动脚本就会失效——所以必须显式声明为 CRLF。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件不要做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+# .vbs 存的是 UTF-16LE(BOM)，会被 git 判为二进制，这里显式声明以免被当文本处理
+*.vbs binary

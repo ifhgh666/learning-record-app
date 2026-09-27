@@ -1,0 +1,24 @@
+# 依赖与产物
+node_modules/
+dist/
+*.log
+.npm-cache/
+.tmp/
+*.tmp.txt
+commit-msg*.txt
+
+# 密钥（绝不上传）
+.env
+.env.*
+*.key
+.credentials*
+token.json
+data/ai.json
+
+# 用户数据不进公开仓库；示例见 samples/
+data/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
