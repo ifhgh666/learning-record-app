@@ -4,6 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "description": "私有学习记录本 —— 本机运行，笔记 + 每日推荐 + 壁纸 + AI 对话",
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"node --watch server/index.mjs\" \"vite --config web/vite.config.mjs\"",
     "build": "vite build --config web/vite.config.mjs",
