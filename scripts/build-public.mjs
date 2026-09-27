@@ -7,6 +7,9 @@
  *  - 公开是不可逆的（git 历史永久可检索），所以公开仓库绝不能带着数据的历史。
  * 独立复制一份全新的、只有代码的仓库是最安全的做法。
  *
+ * ⚠ 目标目录若已经是 git 仓库，本脚本会**保留它的 .git**，只重建工作区内容
+ *   （否则"重新构建"会把仓库删成普通目录，实测踩过）。
+ *
  * 用法：node scripts/build-public.mjs <目标目录>
  */
 import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, statSync, writeFileSync } from 'node:fs'
@@ -44,8 +47,23 @@ const EXCLUDE_NAMES = new Set([
   'data', 'node_modules', 'dist', '.tmp', '.git', '.npm-cache', '.gitignore',
 ])
 
-rmSync(DEST, { recursive: true, force: true })
-mkdirSync(DEST, { recursive: true })
+/*
+ * 重建前先清空目标目录，但**必须保住 .git**。
+ *
+ * 踩过的坑：目标目录通常就是公开仓库本身，直接 rmSync 会把仓库的 .git 一起删掉，
+ * 结果"重新构建"把仓库变成了普通目录（实测发生，只能重新 git init）。
+ * 所以这里改成：只删工作区内容，保留 .git 不动。
+ */
+const hadGit = existsSync(path.join(DEST, '.git'))
+if (existsSync(DEST)) {
+  for (const name of readdirSync(DEST)) {
+    if (name === '.git') continue // 保住仓库
+    rmSync(path.join(DEST, name), { recursive: true, force: true })
+  }
+} else {
+  mkdirSync(DEST, { recursive: true })
+}
+if (hadGit) console.log('目标目录已有 .git，已保留（只清理工作区内容）')
 
 const copied = []
 for (const item of INCLUDE) {
