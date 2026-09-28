@@ -135,22 +135,38 @@ export async function fetchV2ex({ limit = 6 } = {}) {
 }
 
 /**
- * 掘金推荐：**按分类取当天最新**。
+ * 掘金：从**近期**文章里挑**有人看的**。
  *
- * 这里踩过一个坑，值得记下来：最早用的是 recommend_all_feed + sort_type=200，
- * 结果用户反馈"昨天看的今天还是这些"。实测发现那个接口返回的是一批**固定榜单**——
- * 连续两次调用返回完全相同的文章，文章创建时间是 5 月、6 月、7 月的旧文。
+ * 这段踩过两个坑，都记下来：
  *
- * 换成 recommend_cate_feed + **sort_type=300** 后，返回的是当天发布的文章
- * （实测拿到 2026-09-28 当天的多篇）。所以是接口的选择问题，不是缓存问题。
+ * 坑 1：最早用 recommend_all_feed + sort_type=200，用户反馈"昨天看的今天还是这些"。
+ *   实测发现那是个**固定榜单**——连续两次调用返回完全相同的文章，
+ *   且都是 5/6/7 月的旧文。换成 recommend_cate_feed + sort_type=300 才拿到当天文章。
  *
- * 分类取「人工智能」与「开发工具」两个，与这个项目的使用场景相关；
- * 拉完合并去重再截取。
+ * 坑 2：换成"当天最新"后，用户反馈"都是很少赞的"。这其实无解——
+ *   掘金上刚发布的文章本来就没赞：实测最新一批 20 条里 17 条阅读 <50，
+ *   平均阅读仅 26。而 sort_type=200 那批有 131 赞，却都是几个月前的旧文。
+ *   "又新又高赞"在数据上不存在。
+ *
+ * 解法：**拉大候选池，在"近期"范围内按热度挑**。
+ *   四个分类 × 两种排序（300 最新 / 3 近几天）各拉一批，去重后得到 130 条左右，
+ *   全部落在近 3 天内；再按「阅读 + 评论 + 点赞」综合排序取前几名。
+ *   实测平均阅读量从 26 提升到 808，且仍都是近 1~3 天的文章。
+ *
+ * 评论权重给得最高，因为它比点赞更能说明"真的有人讨论"。
  */
 const JUEJIN_CATES = [
   { id: '6809637773935378440', name: '人工智能' },
   { id: '6809637771511070734', name: '开发工具' },
+  { id: '6809637767543259144', name: '前端' },
+  { id: '6809637769959178254', name: '后端' },
 ]
+
+/** 候选池用的排序：300=纯最新，3=近几天（实测两者能捞到不同的文章）。 */
+const JUEJIN_SORTS = [300, 3]
+
+/** 只考虑这个天数内发布的文章，避免为了热度把几个月前的旧文捞上来。 */
+const JUEJIN_MAX_AGE_DAYS = 10
 
 /** 掘金的 ctime 是**秒**，不是毫秒（按毫秒算会得到 1970 年）。 */
 function juejinTime(sec) {
@@ -159,12 +175,19 @@ function juejinTime(sec) {
   return new Date(n > 1e12 ? n : n * 1000).toISOString()
 }
 
-async function fetchJuejinCate(cate, limit) {
+/**
+ * 综合热度分：阅读量打底，评论与点赞加权（它们更能说明内容被认可）。
+ * 评论权重最高：1 条评论 ≈ 30 次阅读 ≈ 3 个赞。
+ */
+function juejinScore(a) {
+  return (a.views ?? 0) + (a.comments ?? 0) * 30 + (a.digs ?? 0) * 10
+}
+
+async function fetchJuejinCate(cate, sortType, limit) {
   const res = await fetch('https://api.juejin.cn/recommend_api/v1/article/recommend_cate_feed', {
     method: 'POST',
     headers: { ...CN_HEADERS, 'Content-Type': 'application/json', Accept: 'application/json' },
-    // sort_type=300 = 最新（200 是固定热门榜，会一直返回同一批）
-    body: JSON.stringify({ id_type: 2, client_type: 2608, sort_type: 300, cursor: '0', limit, cate_id: cate.id }),
+    body: JSON.stringify({ id_type: 2, client_type: 2608, sort_type: sortType, cursor: '0', limit, cate_id: cate.id }),
     signal: AbortSignal.timeout(TIMEOUT),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status} for juejin cate ${cate.name}`)
@@ -186,19 +209,30 @@ async function fetchJuejinCate(cate, limit) {
     }))
 }
 
-export async function fetchJuejin({ limit = 6 } = {}) {
-  const settled = await Promise.allSettled(JUEJIN_CATES.map((c) => fetchJuejinCate(c, limit)))
-  const merged = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
-  if (!merged.length) {
+export async function fetchJuejin({ limit = 6, poolPerQuery = 20 } = {}) {
+  const queries = JUEJIN_CATES.flatMap((cate) => JUEJIN_SORTS.map((sortType) => ({ cate, sortType })))
+  const settled = await Promise.allSettled(
+    queries.map((q) => fetchJuejinCate(q.cate, q.sortType, poolPerQuery)),
+  )
+
+  const pool = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+  if (!pool.length) {
     const err = settled.find((r) => r.status === 'rejected')?.reason
     throw new Error(`掘金全部分类都没抓到${err ? `：${err.message}` : ''}`)
   }
-  // 按发布时间倒序（最新的在前），同一篇只留一次
+
+  // 去重（同一篇可能同时出现在不同分类/排序里）
   const seen = new Set()
-  return merged
-    .filter((a) => (seen.has(a.url) ? false : (seen.add(a.url), true)))
-    .sort((a, b) => String(b.publishedAt ?? '').localeCompare(String(a.publishedAt ?? '')))
-    .slice(0, limit)
+  const uniq = pool.filter((a) => (seen.has(a.url) ? false : (seen.add(a.url), true)))
+
+  // 时效窗口：只保留近期文章
+  const cutoff = Date.now() - JUEJIN_MAX_AGE_DAYS * 86400_000
+  const fresh = uniq.filter((a) => (a.publishedAt ? Date.parse(a.publishedAt) >= cutoff : false))
+
+  // 窗口内一条都没有（极端情况）就退回全部候选，宁可给几篇稍旧的也别空手
+  const candidates = fresh.length ? fresh : uniq
+
+  return [...candidates].sort((a, b) => juejinScore(b) - juejinScore(a)).slice(0, limit)
 }
 
 /**

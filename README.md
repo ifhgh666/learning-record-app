@@ -120,7 +120,7 @@ Key 只保存在你本机（`data/ai.json`），不会提交到 git。
 
 ### 今日推荐
 
-每天自动挑一个近期活跃的 GitHub 项目，外加 V2EX 热门讨论、掘金最新文章。
+每天自动挑一个近期活跃的 GitHub 项目，外加 V2EX 热门讨论、掘金近期热门文章。
 可以标记「值得看 / 已看完」，也可以收藏。
 
 ![今日推荐](docs/screenshots/recommend.png)

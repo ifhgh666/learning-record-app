@@ -186,9 +186,9 @@ onMounted(() => load(false))
         <p v-else class="empty small">今天没有抓到 V2EX 热门讨论。</p>
       </section>
 
-      <!-- 掘金最新文章：按发布时间倒序，所以标题里写"最新"而不是"推荐" -->
+      <!-- 掘金热门：从近期文章里挑真正有人看的（不是纯最新，也不是固定榜单） -->
       <section class="list-block">
-        <h3 class="block-title">掘金最新文章</h3>
+        <h3 class="block-title">掘金热门文章</h3>
         <ul v-if="data.juejin?.length" class="entry-list">
           <li v-for="item in data.juejin" :key="item.url" class="entry">
             <h4 class="entry-title">
