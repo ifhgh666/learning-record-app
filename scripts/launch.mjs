@@ -40,9 +40,13 @@ const already = await isUp()
 
 if (!already) {
   // 首次运行可能还没构建前端；start.mjs 会负责构建
+  //
+  // NO_OPEN=1：让 start.mjs **不要**自己开浏览器。开浏览器由这里负责——
+  // 因为它会先轮询 /api/health 确认服务真的就绪了再开（start.mjs 只是等固定延迟）。
+  // 不传这个变量的话两边都会开，结果点一下图标弹出两个标签页（实测踩过）。
   const child = spawn(process.execPath, [path.join(ROOT, 'scripts', 'start.mjs')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
+    env: { ...process.env, PORT: String(PORT), NO_OPEN: '1' },
     detached: true,
     stdio: 'ignore',
     windowsHide: true,

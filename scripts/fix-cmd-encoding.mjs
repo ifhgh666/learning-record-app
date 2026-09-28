@@ -21,7 +21,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const DEFAULT_FILES = ['打开DSH.cmd', '学习记录本(显示日志).cmd']
+const DEFAULT_FILES = ['学习记录本(显示日志).cmd']
 
 const files = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_FILES
 

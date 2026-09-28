@@ -79,23 +79,9 @@ cd D:\code\learning-record-app
 npm start
 ```
 
-**嫌麻烦的话**，可以做成桌面图标，双击就能开：
-
-```bash
-powershell -ExecutionPolicy Bypass -File scripts/make-shortcut.ps1
-```
-
-（仅 Windows。会在桌面创建快捷方式，之后连终端都不用开。）
-
 ### 怎么关掉
 
 在运行 `npm start` 的那个终端窗口里按 `Ctrl + C`。
-
-如果是用桌面图标启动的（后台运行），用这条命令关：
-
-```bash
-node scripts/stop-server.mjs
-```
 
 ### 可选配置
 
@@ -185,7 +171,8 @@ data/
 └── ai.json                 DeepSeek API Key（不会提交到 git）
 ```
 
-这个目录默认不纳入版本管理——它是你的私人内容，不该跟着代码走。
+这个目录是你的私人内容，**不跟着代码一起公开**（公开版本由
+`scripts/build-public.mjs` 单独构建，那份副本里不含 `data/`）。
 
 ## 说明
 
@@ -200,8 +187,33 @@ data/
 npm run dev                    # 前端热更新 + 后端
 npm run build                  # 构建前端
 npm run check                  # 跑全部测试
-node scripts/stop-server.mjs   # 停止服务
+node scripts/stop-server.mjs   # 停止服务（后台启动时用）
 ```
 
-改动前建议先看一遍 `README.dev.md`，里面记着这个项目踩过的坑
-（文件编码、行尾、测试污染数据之类）。
+### 改代码前值得知道的几个坑
+
+这几个都是实际踩过、排查了很久的，写下来免得重犯：
+
+**1. 文件编码与行尾必须匹配读取方**（Windows 上尤其容易中招）：
+
+| 文件类型 | 必须 | 弄错会怎样 |
+| --- | --- | --- |
+| `.vbs` | UTF-16LE（带 `FF FE` BOM） | cscript 按 ANSI 读，中文路径解析坏，报"未结束的字符串常量" |
+| `.ps1` | UTF-8 with BOM | PowerShell 5.1 按本地代码页读，中文串变乱码 |
+| `.cmd` | UTF-8 无 BOM + `chcp 65001` + **CRLF 行尾** | 行尾是 LF 时 cmd 会把语句切错，报 `'tlocal' is not recognized` 这类莫名其妙的错 |
+| 源码 / 配置 | UTF-8 | — |
+
+`.cmd` 的编码与行尾可以用 `node scripts/fix-cmd-encoding.mjs` 一键修。
+`.gitattributes` 里已声明 `*.cmd text eol=crlf`，否则重新克隆后启动脚本会失效。
+
+**2. 测试绝不能污染真实数据。** 冒烟测试会起一个真实服务并写测试数据，
+所以它用 `GIT_DISABLE_COMMIT=1` 关掉那个临时服务端的自动提交，
+并在收尾时还原被改动的档案。git 提交/合并的行为改由
+`scripts/test-git-commit.mjs` 在**隔离仓库**里验证。
+
+**3. 看界面别只看代码。** 布局、尺寸、遮挡这类问题读 CSS 只能算出"应该是什么样"。
+`scripts/shot.mjs` 用本机已装的 Chrome 无头渲染并截图，同时读回真实 DOM 尺寸与
+计算样式，还带横向溢出检测——视觉改动用它核对。
+
+**4. AI 的 Key 只在服务端。** 浏览器不保存 Key，请求由本机服务代理转发；
+`/api/ai/status` 只回「是否已配置」和 Key 后 4 位，绝不回传 Key 本身（有测试覆盖）。

@@ -28,7 +28,6 @@ const DEST = path.resolve(dest)
 const INCLUDE = [
   '.gitattributes',
   'README.md',
-  'README.dev.md',
   'docs',
   'package.json',
   'package-lock.json',
@@ -36,8 +35,6 @@ const INCLUDE = [
   'web',
   'scripts',
   'samples',
-  '打开DSH.cmd',
-  '打开DSH.vbs',
   '学习记录本.vbs',
   '学习记录本(显示日志).cmd',
 ]
