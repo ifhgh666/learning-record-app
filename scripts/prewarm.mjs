@@ -38,7 +38,7 @@ try {
   await writeFile(file, JSON.stringify(snapshot, null, 2), 'utf8')
   const failed = data.sources.filter((s) => !s.ok)
   console.log(`✓ 已写入 ${path.relative(process.cwd(), file)}（${((Date.now() - t0) / 1000).toFixed(1)}s）`)
-  console.log(`  仓库 ${data.github.length} 个 / HN ${data.news.length} 条 / V2EX ${data.v2ex.length} 条 / 掘金 ${data.juejin.length} 条`)
+  console.log(`  仓库 ${data.github.length} 个 / V2EX ${data.v2ex.length} 条 / 掘金 ${data.juejin.length} 条`)
   if (failed.length) console.log(`  ⚠ 部分数据源没抓到：${failed.map((s) => s.name).join('、')}`)
   if (data.github[0]) console.log(`  今日仓库：${data.github[0].fullName} ★${data.github[0].stars}（建站 ${data.github[0].ageDays} 天）`)
 } catch (err) {

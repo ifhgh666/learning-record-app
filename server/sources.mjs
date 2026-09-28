@@ -1,15 +1,17 @@
 /**
- * 页面一的数据源：全部走公开 API / RSS，不需要任何密钥。
+ * 页面一的数据源：全部走公开 API，不需要任何密钥。
  *
  * 已实测（2026-09-24，本机 Node fetch）：
  *  - GitHub Search API：200，未认证限速 10 次/分钟（够用：一天一轮只打 2~4 次）
- *  - Hacker News 最佳（hnrss）：200
  *  - V2EX 热门讨论：200，返回真实回复数
- *  - 掘金推荐：必须用 POST（GET 返回空），带 id_type/sort_type 才出数据
+ *  - 掘金：必须用 POST（GET 返回空）；且必须用 recommend_cate_feed + sort_type=300，
+ *    否则拿到的是固定热门榜（详见下面 fetchJuejin 的注释）
  *
  * 已放弃的数据源（都实测过，别再试）：
  *  - X/Twitter：免费层不能读时间线；RSSHub twitter 路由 404；7 个 Nitter 实例全部
  *    403/451/Cloudflare 挑战页；官方 oEmbed 404。——想要推特内容只能上付费 API。
+ *  - Hacker News（hnrss）：RSS 抓取可用，但按用户要求已移除该板块（2026-09-28），
+ *    随之删掉了 RSS 解析工具 parseRssItems/getText（不再有调用者）。
  *  - 知乎（热榜 401 要登录、RSS 返回 0 字节）、微博热搜（403）、CSDN（RSS 404）、
  *    小红书（返回 HTML 但需登录才见笔记）、36氪（200 但 0 条目）。
  *
@@ -22,42 +24,10 @@ import { pathToFileURL } from 'node:url'
 const UA = 'learning-record/0.1 (personal local notes)'
 const TIMEOUT = 20_000
 
-/** 用正则从 XML 里抠出条目，避免为一个小工具引入完整 XML 解析器。 */
-function parseRssItems(xml, limit = 200) {
-  const items = []
-  const re = /<item[\s>][\s\S]*?<\/item>/gi
-  for (const m of xml.match(re) ?? []) {
-    const pick = (tag) => {
-      const r = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i')
-      const v = r.exec(m)?.[1] ?? ''
-      return v
-        .replace(/<!\[CDATA\[|\]\]>/g, '')
-        .replace(/<[^>]+>/g, '')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .trim()
-    }
-    const title = pick('title')
-    const link = pick('link') || /<link[^>]*href="([^"]+)"/i.exec(m)?.[1] || ''
-    if (title) items.push({ title, link, summary: pick('description').slice(0, 400) })
-    if (items.length >= limit) break
-  }
-  return items
-}
-
 async function getJson(url) {
   const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT) })
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
   return res.json()
-}
-
-async function getText(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(TIMEOUT) })
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
-  return res.text()
 }
 
 /**
@@ -139,25 +109,6 @@ export async function fetchGithubPick({ freshDays = 30, activeDays = 45 } = {}) 
     .map((c) => ({ ...c, ageDays: Math.max(0, Math.round(ageDays(c))) }))
 }
 
-/** HackerNews：最佳文章（真·人类讨论，免费）。 */
-export async function fetchHackerNews({ limit = 6 } = {}) {
-  const xml = await getText('https://hnrss.org/best')
-  const items = parseRssItems(xml, 60)
-  return items.slice(0, limit).map((it) => {
-    // hnrss 的 description 里带 "Article URL / Comments URL / Points / # Comments" 结构
-    const points = /Points:\s*(\d+)/i.exec(it.summary)?.[1]
-    const comments = /#\s*Comments:\s*(\d+)/i.exec(it.summary)?.[1]
-    const articleUrl = /Article URL:\s*(\S+)/i.exec(it.summary)?.[1] ?? it.link
-    return {
-      title: it.title,
-      url: articleUrl,
-      discussionUrl: it.link,
-      score: points ? Number(points) : null,
-      comments: comments ? Number(comments) : null,
-    }
-  })
-}
-
 const CN_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
   'Accept-Language': 'zh-CN,zh;q=0.9',
@@ -184,25 +135,50 @@ export async function fetchV2ex({ limit = 6 } = {}) {
 }
 
 /**
- * 掘金推荐文章：需要 POST（GET 返回空）。实测 POST 带 id_type/sort_type 才出数据。
+ * 掘金推荐：**按分类取当天最新**。
+ *
+ * 这里踩过一个坑，值得记下来：最早用的是 recommend_all_feed + sort_type=200，
+ * 结果用户反馈"昨天看的今天还是这些"。实测发现那个接口返回的是一批**固定榜单**——
+ * 连续两次调用返回完全相同的文章，文章创建时间是 5 月、6 月、7 月的旧文。
+ *
+ * 换成 recommend_cate_feed + **sort_type=300** 后，返回的是当天发布的文章
+ * （实测拿到 2026-09-28 当天的多篇）。所以是接口的选择问题，不是缓存问题。
+ *
+ * 分类取「人工智能」与「开发工具」两个，与这个项目的使用场景相关；
+ * 拉完合并去重再截取。
  */
-export async function fetchJuejin({ limit = 6 } = {}) {
-  const res = await fetch('https://api.juejin.cn/recommend_api/v1/article/recommend_all_feed', {
+const JUEJIN_CATES = [
+  { id: '6809637773935378440', name: '人工智能' },
+  { id: '6809637771511070734', name: '开发工具' },
+]
+
+/** 掘金的 ctime 是**秒**，不是毫秒（按毫秒算会得到 1970 年）。 */
+function juejinTime(sec) {
+  const n = Number(sec)
+  if (!n) return null
+  return new Date(n > 1e12 ? n : n * 1000).toISOString()
+}
+
+async function fetchJuejinCate(cate, limit) {
+  const res = await fetch('https://api.juejin.cn/recommend_api/v1/article/recommend_cate_feed', {
     method: 'POST',
     headers: { ...CN_HEADERS, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ id_type: 2, client_type: 2608, sort_type: 200, cursor: '0', limit }),
+    // sort_type=300 = 最新（200 是固定热门榜，会一直返回同一批）
+    body: JSON.stringify({ id_type: 2, client_type: 2608, sort_type: 300, cursor: '0', limit, cate_id: cate.id }),
     signal: AbortSignal.timeout(TIMEOUT),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status} for juejin`)
+  if (!res.ok) throw new Error(`HTTP ${res.status} for juejin cate ${cate.name}`)
   const data = await res.json()
-  if (data?.err_no !== 0) throw new Error(`掘金返回错误：${data?.err_msg ?? '未知'}`)
+  if (data?.err_no !== 0) throw new Error(`掘金(${cate.name})返回错误：${data?.err_msg ?? '未知'}`)
   return (data.data ?? [])
-    .map((row) => row?.item_info?.article_info)
+    // 注意：cate_feed 的 article_info 直接在 row 上；all_feed 才套一层 item_info
+    .map((row) => row?.article_info)
     .filter(Boolean)
-    .slice(0, limit)
     .map((a) => ({
       title: a.title ?? '',
       url: `https://juejin.cn/post/${a.article_id}`,
+      cate: cate.name,
+      publishedAt: juejinTime(a.ctime),
       views: a.view_count ? Number(a.view_count) : null,
       digs: a.digg_count ? Number(a.digg_count) : null,
       comments: a.comment_count ? Number(a.comment_count) : null,
@@ -210,14 +186,28 @@ export async function fetchJuejin({ limit = 6 } = {}) {
     }))
 }
 
+export async function fetchJuejin({ limit = 6 } = {}) {
+  const settled = await Promise.allSettled(JUEJIN_CATES.map((c) => fetchJuejinCate(c, limit)))
+  const merged = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+  if (!merged.length) {
+    const err = settled.find((r) => r.status === 'rejected')?.reason
+    throw new Error(`掘金全部分类都没抓到${err ? `：${err.message}` : ''}`)
+  }
+  // 按发布时间倒序（最新的在前），同一篇只留一次
+  const seen = new Set()
+  return merged
+    .filter((a) => (seen.has(a.url) ? false : (seen.add(a.url), true)))
+    .sort((a, b) => String(b.publishedAt ?? '').localeCompare(String(a.publishedAt ?? '')))
+    .slice(0, limit)
+}
+
 /**
  * 抓一轮全部数据源。单个源失败不影响其它源——返回里带每个源的状态，
  * 前端据此如实展示"某个源今天没抓到"，而不是假装有内容。
  */
 export async function fetchAll() {
-  const [github, hn, v2ex, juejin] = await Promise.allSettled([
+  const [github, v2ex, juejin] = await Promise.allSettled([
     fetchGithubPick(),
-    fetchHackerNews(),
     fetchV2ex(),
     fetchJuejin(),
   ])
@@ -229,12 +219,10 @@ export async function fetchAll() {
   })
   return {
     github: pick(github),
-    news: pick(hn),      // 字段名沿用 news，内容是 HN 最佳文章
     v2ex: pick(v2ex),
     juejin: pick(juejin),
     sources: [
       status(github, 'GitHub'),
-      status(hn, 'Hacker News'),
       status(v2ex, 'V2EX'),
       status(juejin, '掘金'),
     ],
@@ -253,13 +241,13 @@ if (invokedDirectly) {
   const started = Date.now()
   const data = await fetchAll()
   console.log(`数据源状态：${data.sources.map((s) => `${s.name}=${s.ok ? 'OK' : `失败(${s.error ?? '无结果'})`}`).join(', ')}`)
-  console.log(`耗时 ${((Date.now() - started) / 1000).toFixed(1)}s · 仓库 ${data.github.length} / HN ${data.news.length} / V2EX ${data.v2ex.length} / 掘金 ${data.juejin.length}`)
+  console.log(`耗时 ${((Date.now() - started) / 1000).toFixed(1)}s · 仓库 ${data.github.length} / V2EX ${data.v2ex.length} / 掘金 ${data.juejin.length}`)
   console.log('\n-- 今日仓库 --')
   for (const r of data.github.slice(0, 3)) console.log(`  ★${r.stars}  ${r.fullName}（建站 ${r.ageDays} 天）`)
   console.log('\n-- V2EX 热门 --')
   for (const t of data.v2ex.slice(0, 4)) console.log(`  [${t.replies} 回复] ${t.title.slice(0, 40)}`)
-  console.log('\n-- 掘金推荐 --')
-  for (const a of data.juejin.slice(0, 4)) console.log(`  [${a.digs ?? '?'} 赞] ${a.title.slice(0, 40)}`)
-  console.log('\n-- HN 最佳 --')
-  for (const n of data.news.slice(0, 3)) console.log(`  [${n.score ?? '?'} 分] ${n.title.slice(0, 50)}`)
+  console.log('\n-- 掘金最新（检查时效性：日期应是今天）--')
+  for (const a of data.juejin.slice(0, 6)) {
+    console.log(`  [${a.publishedAt?.slice(0, 10) ?? '?'}] ${a.cate ?? ''}  ${a.title.slice(0, 36)}`)
+  }
 }

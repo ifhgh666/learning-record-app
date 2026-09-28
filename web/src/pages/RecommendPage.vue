@@ -186,9 +186,9 @@ onMounted(() => load(false))
         <p v-else class="empty small">今天没有抓到 V2EX 热门讨论。</p>
       </section>
 
-      <!-- 掘金推荐文章 -->
+      <!-- 掘金最新文章：按发布时间倒序，所以标题里写"最新"而不是"推荐" -->
       <section class="list-block">
-        <h3 class="block-title">掘金推荐</h3>
+        <h3 class="block-title">掘金最新文章</h3>
         <ul v-if="data.juejin?.length" class="entry-list">
           <li v-for="item in data.juejin" :key="item.url" class="entry">
             <h4 class="entry-title">
@@ -196,34 +196,16 @@ onMounted(() => load(false))
             </h4>
             <p v-if="item.brief" class="entry-summary">{{ item.brief }}</p>
             <p class="entry-meta tiny muted">
-              <span class="entry-time">今日推荐</span>
-              <span class="sep">|</span>
-              <template v-if="item.digs">👍 {{ item.digs }}</template>
-              <template v-if="item.views"> · 👁 {{ item.views }}</template>
-              <template v-if="item.comments"> · 💬 {{ item.comments }}</template>
+              <!-- 显示真实发布日期，这样"是不是今天的"一眼可验证 -->
+              <span class="entry-time">{{ item.publishedAt ? item.publishedAt.slice(0, 10) : '日期未知' }}</span>
+              <template v-if="item.cate"><span class="sep">|</span>{{ item.cate }}</template>
+              <template v-if="item.digs"><span class="sep">|</span>👍 {{ item.digs }}</template>
+              <template v-if="item.views"><span class="sep">|</span>👁 {{ item.views }}</template>
+              <template v-if="item.comments"><span class="sep">|</span>💬 {{ item.comments }}</template>
             </p>
           </li>
         </ul>
-        <p v-else class="empty small">今天没有抓到掘金推荐（它的接口偶尔需要重试）。</p>
-      </section>
-
-      <!-- HN 最佳文章 -->
-      <section class="list-block">
-        <h3 class="block-title">Hacker News 最佳文章</h3>
-        <ul v-if="data.news?.length" class="entry-list">
-          <li v-for="item in data.news" :key="item.url" class="entry">
-            <h4 class="entry-title">
-              <a :href="item.url" target="_blank" rel="noreferrer">{{ item.title }}</a>
-            </h4>
-            <p class="entry-meta tiny muted">
-              <span class="entry-time">今日最佳</span>
-              <template v-if="item.score"><span class="sep">|</span>▲ {{ item.score }} 分</template>
-              <span class="sep">|</span>
-              <a :href="item.discussionUrl" target="_blank" rel="noreferrer">查看讨论</a>
-            </p>
-          </li>
-        </ul>
-        <p v-else class="empty small">今天没有抓到 HN 文章。</p>
+        <p v-else class="empty small">今天没有抓到掘金文章。</p>
       </section>
 
       <p class="tiny muted" style="margin-top:18px">
