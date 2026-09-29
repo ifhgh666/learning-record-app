@@ -91,6 +91,8 @@ onMounted(() => load(false))
       <article v-if="topRepo" class="repo-hero">
         <div class="repo-top">
           <span class="pill">今日仓库</span>
+          <!-- 方向标签：说明这个仓库是从哪个方向（Agent/RAG/前端…）挑出来的 -->
+          <span v-if="topRepo.group" class="pill pill-group">{{ topRepo.group }}</span>
           <span v-if="topRepo.language" class="pill">{{ topRepo.language }}</span>
           <span class="pill">★ {{ topRepo.stars.toLocaleString() }}</span>
           <span v-if="topRepo.ageDays !== undefined" class="pill">建站 {{ topRepo.ageDays }} 天</span>
@@ -142,6 +144,7 @@ onMounted(() => load(false))
         <ul v-if="githubExpanded" class="more-list">
           <li v-for="repo in otherRepos" :key="repo.fullName">
             <a :href="repo.url" target="_blank" rel="noreferrer">{{ repo.fullName }}</a>
+            <span v-if="repo.group" class="tiny muted">{{ repo.group }}</span>
             <span class="tiny muted">★{{ repo.stars.toLocaleString() }}</span>
             <span v-if="repo.ageDays !== undefined" class="tiny muted">{{ repo.ageDays }} 天</span>
             <span class="tiny muted repo-li-desc">{{ repo.description }}</span>

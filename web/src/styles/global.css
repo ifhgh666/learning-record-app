@@ -238,6 +238,8 @@ code, pre, kbd {
 }
 .pill-memory { background: var(--memory-soft); border-color: #f2ddb8; color: var(--memory); }
 .pill-writing { background: var(--writing-soft); border-color: #c8e8ee; color: var(--writing); }
+/* 仓库"方向"标签（Agent / RAG / 前端…）：比普通 pill 更醒目一点，便于一眼看出覆盖面 */
+.pill-group { background: #eaf3ff; border-color: #cfe2fb; color: #1a5fb4; font-weight: 600; }
 
 .muted { color: var(--muted); }
 .small { font-size: 13px; }

@@ -38,25 +38,76 @@ async function getJson(url) {
  */
 
 /**
- * GitHub：找一个"当天值得看的仓库"。
+ * GitHub：每天推一批"值得看的近期新仓库"。
  *
- * 这里踩过一个真实的坑：早先用 `pushed:>45天 + sort=stars` 选出来的全是
- * 建站 400~3000 天、20 万 star 的老牌巨头（hermes-agent 之类），
- * 那不是"今天值得看的新东西"，而是历史总榜。实测对照后改成以
- * 「近期创建 + 近期活跃 + 排除巨星」为主，并保留一个活跃老项目的兜底查询
- * （新项目枯竭的日子不至于空手）。
+ * 这里踩过三个真实的坑：
+ *
+ * 坑 1：早先用 `pushed:>45天 + sort=stars`，选出来的全是建站 400~3000 天、
+ *   20 万 star 的老牌巨头，那是"历史总榜"不是"今天值得看的新东西"。
+ *   改成以「近期创建 + 排除巨星（star 上限）」为主。
+ *
+ * 坑 2（用户反馈"昨天和今天推的是同一个仓库"）：查询只有 3 条、全在
+ *   topic:agent 系列，而且最后按「建站天数」升序排 —— 结果永远优先推那批最新的，
+ *   同一天看是稳定的，但隔一天几乎不变（30 天窗口里新进来的仓库很少能挤进前 8）。
+ *
+ * 坑 3：GitHub 的 `created:>` **不接受相对天数**。`created:>30d` 会返回
+ *   total_count=0（实测），必须是绝对日期 `created:>2026-08-30`。
+ *   （排查上面问题时我写探测脚本图省事用了 `30d`，结果所有话题都"0 条"，
+ *   白绕了一圈。写在这里免得以后又踩。）
+ *
+ * 现在的做法：
+ *   - 查询集按用户的要求分 7 个方向（agent / RAG / LLM+MCP / 工具插件 / 前端 /
+ *     后端 / 全栈），每天从中轮换挑 6 组查询（受未认证限速 10 次/分钟约束）
+ *   - 把所有候选汇总去重成一个大池子
+ *   - 用**当天日期做种子**在池子里轮换取用：所以同一天多次刷新结果稳定，
+ *     隔一天必然换一批（这是"每天要更新"的保证）
+ *   - 保留 star 上限 8000，避免老巨头混入
  */
-export async function fetchGithubPick({ freshDays = 30, activeDays = 45 } = {}) {
+const GH_GROUPS = [
+  { name: 'Agent', topics: ['topic:ai-agent', 'topic:llm-agent', 'topic:multi-agent', 'topic:agent-framework', 'topic:agent'] },
+  { name: 'RAG', topics: ['topic:rag', 'topic:retrieval-augmented-generation', 'topic:vector-database', 'topic:embedding'] },
+  { name: 'LLM', topics: ['topic:mcp', 'topic:llm', 'topic:llmops', 'topic:prompt-engineering'] },
+  { name: '工具', topics: ['topic:cli', 'topic:developer-tools', 'topic:vscode-extension', 'topic:neovim-plugin', 'topic:automation'] },
+  { name: '前端', topics: ['topic:vue', 'topic:react', 'topic:typescript', 'topic:frontend'] },
+  { name: '后端', topics: ['topic:backend', 'topic:golang', 'topic:rust', 'topic:fastapi', 'topic:database'] },
+  { name: '全栈', topics: ['topic:fullstack', 'topic:web-app', 'topic:nextjs'] },
+]
+
+/** 每次抓取用几组查询：未认证限速 10 次/分钟，留余量给兜底查询。 */
+const GH_GROUPS_PER_RUN = 6
+
+/** 当天日期做种子的伪随机（同一天稳定、隔天不同，无需真实随机数）。 */
+function daySeed(dateStr) {
+  let h = 2166136261
+  for (const ch of dateStr) {
+    h ^= ch.charCodeAt(0)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+/** 用种子从数组里取一个从 offset 开始的循环切片（保证每天取到的不同）。 */
+function rotateBySeed(list, seed, offset) {
+  if (!list.length) return []
+  const start = (seed + offset) % list.length
+  return [...list.slice(start), ...list.slice(0, start)]
+}
+
+export async function fetchGithubPick({ freshDays = 30, activeDays = 45, dateStr, recentPushedNames = [] } = {}) {
+  const today = dateStr ?? new Date().toISOString().slice(0, 10)
   const fresh = new Date(Date.now() - freshDays * 86400_000).toISOString().slice(0, 10)
   const active = new Date(Date.now() - activeDays * 86400_000).toISOString().slice(0, 10)
-  const queries = [
-    // 主力：最近创建的智能体/LLM 项目（star 上限挡掉老巨头混入）
-    `topic:ai-agent created:>${fresh} stars:>50 stars:<8000`,
-    `topic:llm-agent created:>${fresh} stars:>30 stars:<8000`,
-    `topic:agent created:>${fresh} stars:>80 stars:<8000`,
-  ]
+  const seed = daySeed(today)
+
+  // 每天轮换一组查询：按种子把方向顺序打乱后取前 N 个
+  const groupsToday = rotateBySeed(GH_GROUPS, seed, 0).slice(0, GH_GROUPS_PER_RUN)
+
   const candidates = []
-  for (const q of queries) {
+  const rateLimited = []
+  for (const group of groupsToday) {
+    // 每个方向里也按种子轮换一个话题，避免同方向每天都是同一个话题
+    const topic = rotateBySeed(group.topics, seed, group.name.length)[0]
+    const q = `${topic} created:>${fresh} stars:>30 stars:<8000`
     try {
       const data = await getJson(
         `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=10`,
@@ -71,12 +122,24 @@ export async function fetchGithubPick({ freshDays = 30, activeDays = 45 } = {}) 
           topics: it.topics ?? [],
           createdAt: it.created_at ?? '',
           pushedAt: it.pushed_at ?? '',
+          group: group.name,
         })
       }
     } catch (err) {
-      console.warn(`[sources] GitHub 查询失败：${q} -> ${err.message}`)
+      const msg = String(err.message)
+      // GitHub 搜索接口未认证时限制 10 次/分钟。这里显式区分出来：
+      // 其余查询仍会继续，只是当天候选变少；不要让"限速"看起来像"这个方向没内容"。
+      if (msg.includes('403') || msg.includes('429')) {
+        rateLimited.push(group.name)
+        console.warn(`[sources] GitHub 限速（未认证 10 次/分钟），跳过 ${group.name}：${q}`)
+      } else {
+        console.warn(`[sources] GitHub 查询失败：${q} -> ${msg}`)
+      }
     }
-    if (candidates.length >= 15) break
+    if (candidates.length >= 60) break
+  }
+  if (rateLimited.length) {
+    console.warn(`[sources] GitHub 共 ${rateLimited.length} 组查询被限速：${rateLimited.join('、')}（当天候选会少一些）`)
   }
 
   // 兜底：新项目枯竭时（例如限速或确实没有新仓库），用近期活跃的老项目补位
@@ -91,6 +154,7 @@ export async function fetchGithubPick({ freshDays = 30, activeDays = 45 } = {}) 
             fullName: it.full_name, url: it.html_url, description: it.description ?? '',
             stars: it.stargazers_count ?? 0, language: it.language ?? '',
             topics: it.topics ?? [], createdAt: it.created_at ?? '', pushedAt: it.pushed_at ?? '',
+            group: 'Agent',
           })
         }
       } catch (err) {
@@ -99,14 +163,72 @@ export async function fetchGithubPick({ freshDays = 30, activeDays = 45 } = {}) 
     }
   }
 
-  // 去重后排序：新仓库优先，同新建时长内 star 高的优先。
+  // 去重（同一仓库可能带多个话题，被多个方向查到）
   const seen = new Set()
   const uniq = candidates.filter((c) => (seen.has(c.fullName) ? false : (seen.add(c.fullName), true)))
+
+  // 先按"建站时间"排（新的优先），再按当天种子轮换取用——
+  // 这样既有新鲜度，又保证每天推的不是同一批。
   const ageDays = (c) => (c.createdAt ? (Date.now() - new Date(c.createdAt).getTime()) / 86400_000 : 9999)
-  return uniq
-    .sort((a, b) => ageDays(a) - ageDays(b) || b.stars - a.stars)
-    .slice(0, 8)
-    .map((c) => ({ ...c, ageDays: Math.max(0, Math.round(ageDays(c))) }))
+  const ranked = [...uniq].sort((a, b) => ageDays(a) - ageDays(b) || b.stars - a.stars)
+
+  /**
+   * 质量门槛：只要 star 数够的仓库。
+   *
+   * 为什么要这一步：实测轮换算法会捞出 ★3、★4 这种刚建站、根本没人看的仓库
+   * （还有一个 3 星仓库的镜像号也混进来了），那种"推荐"没有价值。
+   * 先把候选限制在 star≥30 里；万一不够 8 个再逐步放宽，宁可少推也不推噪音。
+   */
+  const minStars = [30, 15, 5, 0].find((m) => ranked.filter((c) => c.stars >= m).length >= 8) ?? 0
+  const pool = ranked.filter((c) => c.stars >= minStars)
+
+  /**
+   * 取用时做"**跨天不重复**"的硬保证。
+   *
+   * 只靠"当天种子轮换"是不够的：加了质量门槛后候选池变小，实测
+   * mikehasa/golive-skill 在 09-28 和 09-30 都出现过（轮换的起点落在同一个窗口里）。
+   * 用户明确要求"每天要更新"，所以这里改成：
+   *   从池子里按种子取 8 个，然后逐条检查它们**近 N 天是否已经推过**；
+   *   推过的换成池子里的下一个候选。
+   * 传入 recentPushed（近几天的推荐记录）即可生效；没有历史数据时退化为纯轮换。
+   */
+  const recentlyPushed = new Set(recentPushedNames)
+  const ordered = rotateBySeed(pool.slice(0, 60), seed, 7)
+
+  const perGroup = new Map()
+  const picked = []
+  const taken = new Set()
+
+  const tryTake = (c, enforceGroupCap) => {
+    if (taken.has(c.fullName)) return false
+    if (recentlyPushed.has(c.fullName)) return false
+    if (enforceGroupCap) {
+      const used = perGroup.get(c.group) ?? 0
+      if (used >= 2) return false
+      perGroup.set(c.group, used + 1)
+    }
+    taken.add(c.fullName)
+    picked.push(c)
+    return true
+  }
+
+  // 第一轮：每个方向最多 2 个
+  for (const c of ordered) {
+    if (picked.length >= 8) break
+    tryTake(c, true)
+  }
+  // 第二轮：方向不限，只要没推过就补进来
+  for (const c of ordered) {
+    if (picked.length >= 8) break
+    tryTake(c, false)
+  }
+  // 第三轮（最后手段）：池子里实在没有没推过的了，允许重复，但至少别空手
+  for (const c of ordered) {
+    if (picked.length >= 8) break
+    if (!taken.has(c.fullName)) { taken.add(c.fullName); picked.push(c) }
+  }
+
+  return picked.map((c) => ({ ...c, ageDays: Math.max(0, Math.round(ageDays(c))) }))
 }
 
 const CN_HEADERS = {
@@ -238,10 +360,12 @@ export async function fetchJuejin({ limit = 6, poolPerQuery = 20 } = {}) {
 /**
  * 抓一轮全部数据源。单个源失败不影响其它源——返回里带每个源的状态，
  * 前端据此如实展示"某个源今天没抓到"，而不是假装有内容。
+ *
+ * recentPushedNames：最近几天已经推过的仓库名，传给 GitHub 源用于跨天去重。
  */
-export async function fetchAll() {
+export async function fetchAll({ recentPushedNames = [] } = {}) {
   const [github, v2ex, juejin] = await Promise.allSettled([
-    fetchGithubPick(),
+    fetchGithubPick({ recentPushedNames }),
     fetchV2ex(),
     fetchJuejin(),
   ])

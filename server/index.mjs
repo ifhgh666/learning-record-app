@@ -275,6 +275,25 @@ async function writeJson(file, data) {
   await writeFile(file, JSON.stringify(data, null, 2), 'utf8')
 }
 
+/**
+ * 读出最近 N 天推荐过的仓库名，用于让 GitHub 推荐"跨天不重复"。
+ * 读取失败（首次运行没有历史快照）就返回空数组，退化为纯按日期轮换。
+ */
+const RECENT_PUSH_DAYS = 7
+
+async function recentlyPushedRepos(date) {
+  const names = []
+  for (let i = 1; i <= RECENT_PUSH_DAYS; i += 1) {
+    const d = new Date(`${date}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() - i)
+    const snap = await readJson(recommendSnapshotFile(d.toISOString().slice(0, 10)))
+    for (const r of snap?.github ?? []) {
+      if (r?.fullName) names.push(r.fullName)
+    }
+  }
+  return names
+}
+
 /** 读取（或首次抓取）某天的推荐快照。force=true 时忽略缓存重抓。 */
 async function ensureSnapshot(date, { force = false } = {}) {
   const file = recommendSnapshotFile(date)
@@ -283,7 +302,9 @@ async function ensureSnapshot(date, { force = false } = {}) {
     return { ...cached, fromCache: true }
   }
   try {
-    const data = await fetchAll()
+    // 把最近几天推过的仓库告诉数据源，避免今天又推同一个
+    const recentPushedNames = await recentlyPushedRepos(date)
+    const data = await fetchAll({ recentPushedNames })
     const snapshot = { date, ...data, fromCache: false }
     await writeJson(file, snapshot)
     await commitData(`recommend: ${date} 每日推荐快照`)
